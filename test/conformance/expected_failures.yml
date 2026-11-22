@@ -1,0 +1,12 @@
+# Baseline of the server scenarios that the conformance server does not
+# pass. The tool reads the key `server` (a list of scenario names) and
+# fails the run when a scenario fails outside of this list, or when a name
+# here passes. Remove a name when the scenario passes.
+server:
+  # The scenario sends its POST requests with the header
+  # `mcp-protocol-version: 2025-03-26` and the server answers
+  # `400 Bad Request` with the JSON-RPC error "unsupported MCP protocol
+  # version". This is the answer that the transport specification (revision
+  # 2025-11-25, "Protocol Version Header") requires for a version that the
+  # server does not support, so the scenario fails by its own header.
+  - server-sse-multiple-streams

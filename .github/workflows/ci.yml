@@ -1,0 +1,172 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  MIX_ENV: test
+  OTP: "28.1"
+  ELIXIR: "1.19.4"
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: "${{ env.OTP }}"
+          elixir-version: "${{ env.ELIXIR }}"
+      - uses: actions/cache@v6
+        with:
+          path: |
+            deps
+            _build
+          key: mix-${{ runner.os }}-${{ env.OTP }}-${{ env.ELIXIR }}-${{ hashFiles('mix.lock') }}
+      - run: mix deps.get
+      - run: mix format --check-formatted
+      - run: mix compile --warnings-as-errors
+      - run: mix credo --strict
+
+  dialyzer:
+    runs-on: ubuntu-latest
+    env:
+      MIX_ENV: dev
+    steps:
+      - uses: actions/checkout@v7
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: "${{ env.OTP }}"
+          elixir-version: "${{ env.ELIXIR }}"
+      - uses: actions/cache@v6
+        with:
+          # The PLT lives under `_build/plts`, so the cache of `_build` holds it.
+          path: |
+            deps
+            _build
+          key: plt-${{ runner.os }}-${{ env.OTP }}-${{ env.ELIXIR }}-${{ hashFiles('mix.lock') }}
+          restore-keys: plt-${{ runner.os }}-${{ env.OTP }}-${{ env.ELIXIR }}-
+      - run: mix deps.get
+      - run: mix dialyzer
+
+  docs:
+    runs-on: ubuntu-latest
+    env:
+      MIX_ENV: dev
+    steps:
+      - uses: actions/checkout@v7
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: "${{ env.OTP }}"
+          elixir-version: "${{ env.ELIXIR }}"
+      - run: mix deps.get
+      - run: mix docs --warnings-as-errors
+
+  test-unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: "${{ env.OTP }}"
+          elixir-version: "${{ env.ELIXIR }}"
+      - run: mix deps.get
+      - run: mix test.unit
+
+  test-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: "${{ env.OTP }}"
+          elixir-version: "${{ env.ELIXIR }}"
+      - run: mix deps.get
+      - run: mix test.e2e
+      - run: mix test.stdio
+      - run: mix test.cluster
+
+  test-e2e-cowboy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: "${{ env.OTP }}"
+          elixir-version: "${{ env.ELIXIR }}"
+      - run: mix deps.get
+      - run: mix test.e2e.cowboy
+
+  # Drives the example server with the official TypeScript SDK client, over
+  # HTTP and stdio. The versions of the SDK and of the runner are pinned in
+  # `test/sdk_client/package.json` and `package-lock.json`.
+  test-sdk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: "${{ env.OTP }}"
+          elixir-version: "${{ env.ELIXIR }}"
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: test/sdk_client/package-lock.json
+      - uses: actions/cache@v6
+        with:
+          path: |
+            deps
+            _build
+          key: mix-${{ runner.os }}-${{ env.OTP }}-${{ env.ELIXIR }}-${{ hashFiles('mix.lock') }}
+      - run: mix deps.get
+      - run: mix test.sdk
+
+  # The job blocks the build. The baseline file
+  # `test/conformance/expected_failures.yml` lists the scenarios that are
+  # allowed to fail, each with its reason. A scenario that fails outside the
+  # list, or a name of the list that passes, fails the job. The versions of
+  # the tool are pinned and an update is a decision.
+  conformance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: "${{ env.OTP }}"
+          elixir-version: "${{ env.ELIXIR }}"
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+      - uses: actions/cache@v6
+        with:
+          path: |
+            deps
+            _build
+          key: mix-${{ runner.os }}-${{ env.OTP }}-${{ env.ELIXIR }}-${{ hashFiles('mix.lock') }}
+      - run: mix deps.get
+      # The compile runs apart, so the wait for the server covers its start only.
+      - run: mix compile
+      - name: Conformance suite against the example server
+        run: |
+          mix conformance.serve 4040 > server.log 2>&1 &
+          server_pid=$!
+          for i in $(seq 1 60); do grep -q READY server.log && break; sleep 1; done
+          grep -q READY server.log || { cat server.log; exit 1; }
+          status=0
+          npx --yes @modelcontextprotocol/conformance@0.1.16 server \
+            --url http://127.0.0.1:4040/mcp \
+            --expected-failures test/conformance/expected_failures.yml || status=$?
+          kill "$server_pid" || true
+          [ "$status" -eq 0 ] || cat server.log
+          exit "$status"
+      - name: Keep the server log of a failed run
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: conformance-server-log
+          path: server.log

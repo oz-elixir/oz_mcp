@@ -1,0 +1,18 @@
+{
+  "name": "oz-mcp-sdk-client-tests",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc -p .",
+    "pretest": "cd ../.. && MIX_ENV=test mix compile --warnings-as-errors && cd test/sdk_client && npm run typecheck",
+    "test": "node --import tsx --test --test-concurrency=1 --test-timeout=120000 \"*.test.ts\""
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.2"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "tsx": "4.23.15",
+    "typescript": "7.0.2"
+  }
+}
